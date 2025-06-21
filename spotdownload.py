@@ -1,49 +1,26 @@
 
 import os
 import sys
-from pytube import YouTube
-from pytube.cli import on_progress
 from bs4 import BeautifulSoup
 import requests
 import json
 import base64
 import yt_dlp
+from pydub import AudioSegment
 
-"""
-client_id = '7d2fc3185542431bbc5b8f52d15aebcb'
-client_secret = 'e8f17bd9347345819c61f1e35dda3865'
-
-#encode client credentials
-credentials = f"{client_id}:{client_secret}"
-encoded_credentials = base64.b64encode(credentials.encode()).decode()
-
-#request access token
-token_url = "https://accounts.spotify.com/api/token"
-headers = {
-    "Authorization": f"Basic {encoded_credentials}",
-    "Content-Type": "application/x-www-form-urlencoded"
-}
-data = {"grant_type": "client_credentials"}
-
-response = requests.post(token_url, headers=headers, data=data)
-response_data = response.json()
-access_token = response_data.get("access_token")
-
-if access_token:
-    print(f"access Token: {access_token}")
-else:
-    print("failed to obtain access token")
-"""
-
-
-
-type = ""
+musicType = ""
 
 album = input("paste link to playlist here: ")
+if "playlist" in album:
+    musicType = "playlists"
+if "album" in album:
+    musicType = "albums"
 try:
+    #url = album[album.rfind("/")+1:album.index("?")]
     url = album[:album.index("?")]
 except:
     pass
+
 album = url
 try:
     while "/" in album:
@@ -51,27 +28,44 @@ try:
 except:
     pass
 
-html=requests.get(url)
-text=html.content.decode('utf-8')
-i=text.index('"accessToken"')
-j=text.index('"accessTokenExpiration')
-token=text[i+15:j-2]
-print(token)
-#token = access_token
-if "album" in url:
-    album_url='https://api.spotify.com/v1/albums/' + album
-    type = "album"
-if "playlist"  in url:
-    album_url='https://api.spotify.com/v1/playlists/' + album
-    type = "playlist"
+stitch = input("Would you like to stitch all the songs together into one file? (Y/N): ")
+#CREDENTIALS- DO NOT LEAK
+client_id = 
+client_secret = 
 
-response=requests.get(album_url, headers={"authorization":"Bearer " + token})
-content=json.loads(response.content.decode('utf-8'))
+#encode client_id and client_secret in base64
+auth_str = f"{client_id}:{client_secret}"
+b64_auth_str = base64.b64encode(auth_str.encode()).decode()
 
-out_file = open("myfile.json", "w")
-json.dump(content, out_file, indent = 6)
-  
-out_file.close()
+#request token
+token_url = "https://accounts.spotify.com/api/token"
+headers = {
+    "Authorization": f"Basic {b64_auth_str}",
+}
+data = {
+    "grant_type": "client_credentials"
+}
+
+response = requests.post(token_url, headers=headers, data=data)
+token_info = response.json()
+access_token = token_info['access_token']
+print("Access token:", access_token)
+
+
+album_id = album  # example album or playlist id
+album_url = f"https://api.spotify.com/v1/{musicType}/{album_id}"
+
+
+headers = {
+    "Authorization": f"Bearer {access_token}"
+}
+
+response = requests.get(album_url, headers=headers)
+content = response.json()
+
+#save to file
+with open("myfile.json", "w", encoding="utf-8") as f:
+    json.dump(content, f, indent=4)
 
 
 
@@ -81,15 +75,13 @@ songs = {
 
 
 
-
-
 for s in range(len(content["tracks"]["items"])):
-    if type == "album":
+    if musicType == "albums":
         songs[content["tracks"]["items"][s]["name"]] = []
         # there could be multiple artists
         for a in range(len(content["tracks"]["items"][s]["artists"])):
             songs[content["tracks"]["items"][s]["name"]].append(content["tracks"]["items"][s]["artists"][a]["name"])
-    if type == "playlist":
+    if musicType == "playlists":
         songs[content["tracks"]["items"][s]["track"]["name"]] = [] #name of song
         # there could be multiple artists
         for a in range(len(content["tracks"]["items"][s]["track"]["artists"])): #corresponding artists
@@ -162,21 +154,52 @@ for y in ytquerys:
     #yts.append(url)
 
 
-#print(yts)
+track = None
 
-#download each song
-for y in range(0, len(yts)):
-    #change outtmpl for name change
+# download and stitch
+for y in range(len(yts)):
+    title = songtitles[y].replace("+", " ")
+    out_file = f"{title}.mp3"
+
     ydl_opts = {
         'format': 'bestaudio',
-        'outtmpl': 'audio.%(ext)s',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'outtmpl': f"{title}.%(ext)s",
         'downloader': 'aria2c',
         'downloader_args': {'aria2c': '-x 16 -s 16 -k 1M'},
-        'outtmpl': songtitles[y].replace("+", " ")+'.%(ext)s'
+        'ffmpeg_location': r'C:\FFmpeg\bin',
+        'socket_timeout': 60,
+        'retries': 10,
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([yts[y]])
+
+    # After download, assume final file is .mp3
+    filepath = os.path.join(os.getcwd(), out_file)
+
+    if not os.path.isfile(filepath):
+        print(f"[Warning] Skipped: {filepath} not found.")
+        continue
+
+    song = AudioSegment.from_file(filepath, format="mp3")
+
+    if stitch.lower() == "y":
+        if track is None:
+            track = song
+        else:
+            track += song
+        os.remove(filepath)
+
+# export final album
+if stitch.lower() == "y" and track:
+    output_path = os.path.join(os.getcwd(), "album.mp3")
+    track.export(output_path, format="mp3")
+    print(f"[Done] Stitched album saved to: {output_path}")
 
 print("\n\nDONE! Check the folder this program is in.\n")
 
